@@ -147,9 +147,9 @@ def camera_to_pixel(camera_arr, i):
     K = intrinsic_matrix(i)
 
     # Normalized 좌표로 만들기 위해 Zc=0 인 부분 1로 바꿔 예외 처리
-    for i in range(len(camera_arr)):
-        if camera_arr[i][2] == 0:
-            camera_arr[i][2] = 1
+    # for i in range(len(camera_arr)):
+    #     if camera_arr[i][2] == 0:
+    #         camera_arr[i][2] = 1
 
     n_x = camera_arr[:, 0] / camera_arr[:, 2]  # Xc / Zc
     n_y = camera_arr[:, 1] / camera_arr[:, 2]  # Yc / Zc
@@ -191,17 +191,18 @@ def visualizing_image(pixel, rgb_arr):
     :param rgb_arr: point-wise array
     :return: final_image
     '''
-    img_w = 640
-    img_h = 480
-    # plt.imshow()는 정수형만 표현하므로 dtype = int32
-    result_img = np.full((img_h, img_w, 3), 255, dtype=np.int32)
+    # img_w = 640
+    # img_h = 480
+    img_w = 2592//4
+    img_h = 1944//4
+    # plt.imshow()는 정수형만 표현하므로 dtype = uin8
+    result_img = np.full((img_h, img_w, 3), 0, dtype=np.uint8)
     # result_img.fill()
-    cnt = 0
+
     for i in range(len(pixel)):
         if 0 <= pixel[i][0] < img_w and 0 <= pixel[i][1] < img_h:
             # 해당 pixel의 intensity 대입
             result_img[pixel[i][1], pixel[i][0]] = rgb_arr[i]
-            cnt += 1
 
     return result_img
 
