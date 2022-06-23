@@ -1,7 +1,6 @@
 import rclpy
 import cv2
 import numpy as np
-import math as m
 import matplotlib.pyplot as plt
 import transforms3d as tf
 from rclpy.node import Node
@@ -15,8 +14,6 @@ from geometry_msgs.msg import Point32
 from sensor_msgs.msg import ChannelFloat32
 from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge
-from multiprocessing import Pool
-from functools import partial
 
 
 class Adaptive_IPM(Node):
@@ -94,21 +91,6 @@ class Adaptive_IPM(Node):
         self.roll, self.pitch, self.yaw = tf.euler.quat2euler(quaternion)
         #print(self.roll, self.pitch, self.yaw)
         self.theta_p = -self.pitch
-        
-        
-    def visualizing_image(pixel):
-        # img_w = 640
-        # img_h = 480
-        img_w = 2592
-        img_h = 1944
-        # plt.imshow()는 정수형만 표현하므로 dtype = uin8
-        result_img = np.full((img_h, img_w, 3), 255, dtype=np.uint8)
-        # result_img.fill()
-
-
-        result_img[pixel[1], pixel[0]] = 0
-
-        return result_img
             
             
     def get_IPM(self, msg):
@@ -125,7 +107,7 @@ class Adaptive_IPM(Node):
         roi_u1, roi_v1 = img_width//6, img_height
         roi_u2, roi_v2 = img_width//6, img_height*2//3
         roi_u3, roi_v3 = img_width*5//6, img_height*2//3
-        roi_u6, roi_v6 = img_width*5//6, img_height
+        roi_u6, roi_v6 = img_width*5//6, img_height*2
         # roi_u1, roi_v1 = 0, img_height
         # roi_u2, roi_v2 = 0, img_height*7//10
         # roi_u3, roi_v3 = img_width//4, img_height*3//5
@@ -190,13 +172,13 @@ class Adaptive_IPM(Node):
         
         
         # =================================== virtual camera로 visualizing ===================================
-        # camera_XY = wtc.world_to_camera(X_Y, self.extrinsic_param)
-        # pixel_XY = wtc.camera_to_pixel(camera_XY, self.intrinsic_param)
-        # BEV_image = wtc.visualizing_image(pixel_XY, roi_intensity)
+        camera_XY = wtc.world_to_camera(X_Y, self.extrinsic_param)
+        pixel_XY = wtc.camera_to_pixel(camera_XY, self.intrinsic_param)
+        BEV_image = wtc.visualizing_image(pixel_XY, roi_intensity)
         
-        # cv2.namedWindow("BEV_image", 0);
-        # cv2.resizeWindow("BEV_image", BEV_image.shape[1], BEV_image.shape[0])
-        # cv2.imshow("BEV_image", BEV_image)
+        cv2.namedWindow("BEV_image", 0);
+        cv2.resizeWindow("BEV_image", BEV_image.shape[1], BEV_image.shape[0])
+        cv2.imshow("BEV_image", BEV_image)
         cv2.waitKey(1)
 
 
@@ -206,17 +188,17 @@ class Adaptive_IPM(Node):
         rgb_ch.name = 'intensity'
         
         
-        for i in range(X.size):
-            data = Point32()
-            data.x = X[i][0]
-            data.y = Y[i][0]
-            rgb_color = roi_intensity[i][2]
-            IPM_points.points.append(data)
-            rgb_ch.values.append(rgb_color)
+        # for i in range(X.size):
+        #     data = Point32()
+        #     data.x = X[i][0]
+        #     data.y = Y[i][0]
+        #     rgb_color = roi_intensity[i][2]
+        #     IPM_points.points.append(data)
+        #     rgb_ch.values.append(rgb_color)
         
-        IPM_points.channels.append(rgb_ch)
-        IPM_points.header.frame_id = "ipm"
-        self.IPM_publisher.publish(IPM_points)
+        # IPM_points.channels.append(rgb_ch)
+        # IPM_points.header.frame_id = "ipm"
+        # self.IPM_publisher.publish(IPM_points)
 
 
         # plt.scatter(X, Y, s=1, c='black')
