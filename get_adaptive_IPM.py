@@ -125,7 +125,7 @@ class Adaptive_IPM(Node):
         roi_u1, roi_v1 = img_width//6, img_height
         roi_u2, roi_v2 = img_width//6, img_height*2//3
         roi_u3, roi_v3 = img_width*5//6, img_height*2//3
-        roi_u6, roi_v6 = img_width*5//6, img_height
+        roi_u6, roi_v6 = img_width*5//6, img_height*3
         # roi_u1, roi_v1 = 0, img_height
         # roi_u2, roi_v2 = 0, img_height*7//10
         # roi_u3, roi_v3 = img_width//4, img_height*3//5
