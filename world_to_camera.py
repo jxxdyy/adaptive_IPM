@@ -193,8 +193,8 @@ def visualizing_image(pixel, rgb_arr):
     '''
     # img_w = 640
     # img_h = 480
-    img_w = 2592//4
-    img_h = 1944//4
+    img_w = 2592
+    img_h = 1944
     # plt.imshow()는 정수형만 표현하므로 dtype = uin8
     result_img = np.full((img_h, img_w, 3), 0, dtype=np.uint8)
     # result_img.fill()
