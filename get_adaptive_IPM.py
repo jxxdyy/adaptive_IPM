@@ -1,12 +1,11 @@
 import rclpy
 import cv2
+import time
 import numpy as np
-import math as m
 import matplotlib.pyplot as plt
 import transforms3d as tf
 from rclpy.node import Node
 import world_to_camera as wtc
-import pcl
 import sensor_msgs.msg as sensor_msgs
 import std_msgs.msg as std_msgs
 #from sensor_msgs.msg import Image
@@ -96,10 +95,20 @@ class Adaptive_IPM(Node):
         self.theta_p = -self.pitch
         
         
-    def point_cloud(self, points, parent_frame):
+    def visualizing_image(self, points_field, intensity):
+        points = points_field[:,:3]
+        
+        camera_XY = wtc.world_to_camera(points, self.extrinsic_param)
+        pixel_XY = wtc.camera_to_pixel(camera_XY, self.intrinsic_param)
+        BEV_image = wtc.visualizing_image(pixel_XY, intensity)
+        
+        return BEV_image
+    
+        
+    def point_cloud2(self, points, parent_frame):
         """ Creates a point cloud message.
         Args:
-            points: Nx3 array of xyz positions.
+            points: Nx4 array of xyz positions & 'g' color value
             parent_frame: frame in which the point cloud is defined
         Returns:
             sensor_msgs/PointCloud2 message
@@ -109,9 +118,12 @@ class Adaptive_IPM(Node):
         itemsize = np.dtype(dtype).itemsize  # A 32-bit float takes 4 bytes.
 
         data = points.astype(dtype).tobytes()
+        
+        
         fields = [sensor_msgs.PointField(
             name=n, offset=i * itemsize, datatype=ros_dtype, count=1)
-            for i, n in enumerate('xyzrgb')]
+            for i, n in enumerate('xyzbg')]
+
         header = std_msgs.Header(frame_id=parent_frame)
 
         return sensor_msgs.PointCloud2(
@@ -121,20 +133,22 @@ class Adaptive_IPM(Node):
             is_dense=False,
             is_bigendian=False,
             fields=fields,
-            point_step=(itemsize * 6),  # Every point consists of three float32s.
-            row_step=(itemsize * 6 * points.shape[0]),
+            point_step=(itemsize * 5),  # Every point consists of three float32s.
+            row_step=(itemsize * 5 * points.shape[0]),
             data=data
         )        
         
             
     def get_IPM(self, msg):
+        start_time = time.time_ns()
         bridge = CvBridge()
         front_image = bridge.compressed_imgmsg_to_cv2(msg, 'bgr8')
         #front_image = np.uint8(front_image)
-        resize_f_img = cv2.resize(front_image, (front_image.shape[1]//2, front_image.shape[0]//2), interpolation=cv2.INTER_CUBIC)
+        #resize_f_img = cv2.resize(front_image, (front_image.shape[1]//2, front_image.shape[0]//2), interpolation=cv2.INTER_CUBIC)
+
         img_width = front_image.shape[1]
         img_height = front_image.shape[0]
-        
+
         
         # ROI
         mask = np.zeros_like(front_image)
@@ -155,29 +169,30 @@ class Adaptive_IPM(Node):
         # ROI image -> 해당 intesity만 받아올 때 써볼 수 있지 않을까?
         roi_f_img = ROI_area[roi_v3:roi_v6, roi_u1:roi_u6]
         roi_intensity = np.reshape(roi_f_img, (roi_f_img.size//3, 3))
+    
         
         # print(front_image.shape)
         # print(roi_f_img.shape)
         # print(roi_intensity.shape)
-    
+
         # cv2.namedWindow("front_image", 0);
         # cv2.resizeWindow("front_image", front_image.shape[1]//2, front_image.shape[0]//2)
         # cv2.imshow("front_image", front_image)
     
-        cv2.namedWindow("roi_f_img", 0);
-        cv2.resizeWindow("roi_f_img", roi_f_img.shape[1]//2, roi_f_img.shape[0]//2)
-        cv2.imshow("roi_f_img", roi_f_img)
+        # cv2.namedWindow("roi_f_img", 0);
+        # cv2.resizeWindow("roi_f_img", roi_f_img.shape[1]//2, roi_f_img.shape[0]//2)
+        # cv2.imshow("roi_f_img", roi_f_img)
         
         cv2.namedWindow("ROI_area", 0);
         cv2.resizeWindow("ROI_area", ROI_area.shape[1]//2, ROI_area.shape[0]//2)
         cv2.imshow("ROI_area", ROI_area)
+        cv2.waitKey(1)
         
         
-        #print(self.theta_p)
         # =================================== Adaptive IPM 적용 부분 ===================================
         # pixel idx 얻기
         u_arr, v_arr = np.meshgrid(np.arange(roi_u1, roi_u6), np.arange(roi_v3, roi_v6))
-        
+
         # IPM 적용시킬 pixel 
         u = np.reshape(u_arr, (u_arr.size, 1))
         v = np.reshape(v_arr, (v_arr.size, 1))
@@ -188,53 +203,47 @@ class Adaptive_IPM(Node):
         u2c = lambda u:(u - (self.cx + 0.5))
         r = v2r(v)
         c = u2c(u)      
+ 
         
         # derive X & Y
-        theta_v = -np.arctan2(r, self.fx)
+        theta_v = -np.arctan(r/self.fx)
         X = self.h * (1 / np.tan(self.theta + self.theta_p + theta_v))
         Y = -(np.cos(theta_v) / np.cos(self.theta + self.theta_p + theta_v)) * X * c / (self.fx)
         Z = np.zeros_like(X)
-        X_Y = np.column_stack((X, Y, Z, roi_intensity[:,0], roi_intensity[:,1], roi_intensity[:,2]))
-        #print(X_Y)
-        print("X size :", X.size)
+        
+        print('max', np.max(roi_intensity[:,0]))
+
+        points_field = np.column_stack((X, Y, Z, roi_intensity[:,0], roi_intensity[:,1]))
+        
+        print(points_field)
+        # print("X size :", X.size)
         # print("Y size :", np.min(Y))
         # print(X_Y)
         
         
         # =================================== virtual camera로 visualizing ===================================
-        # camera_XY = wtc.world_to_camera(X_Y, self.extrinsic_param)
-        # pixel_XY = wtc.camera_to_pixel(camera_XY, self.intrinsic_param)
-        # BEV_image = wtc.visualizing_image(pixel_XY, roi_intensity)
+        # BEV_image = self.visualizing_image(points_field, roi_intensity)
         
         # cv2.namedWindow("BEV_image", 0);
         # cv2.resizeWindow("BEV_image", BEV_image.shape[1]//2, BEV_image.shape[0]//2)
         # cv2.imshow("BEV_image", BEV_image)
-        cv2.waitKey(1)
 
 
         # =================================== Publishing PointCloud ===================================
-        # IPM_points = PointCloud()
-        # rgb_ch = ChannelFloat32()
-        # rgb_ch.name = "rgb"
         
+        g_points_field = points_field[(points_field[:, 3] > 90) & (points_field[:, 4] > 90)]
+        print(g_points_field)
+        print(len(g_points_field))
         
-        # for i in range(X.size):
-        #     data = Point32()
-        #     data.x = X[i][0]
-        #     data.y = Y[i][0]
-        #     rgb_color = roi_intensity[i]
-        #     IPM_points.points.append(data)
-        #     rgb_ch.values.append(rgb_color)
-        
-        # IPM_points.channels.append(rgb_ch)
-        # IPM_points.header.frame_id = "ipm"
-        # self.IPM_publisher.publish(IPM_points)
-        
-        IPM_points = self.point_cloud(X_Y, 'ipm')
+        IPM_points = self.point_cloud2(g_points_field, 'ipm')
         self.IPM_publisher.publish(IPM_points)
 
         # plt.scatter(X, Y, s=1, c='black')
         # plt.show()
+        
+        end_time = time.time_ns()
+
+        print('코드 실행 시간: %20ds' % (end_time - start_time))
         
         
 def main(args=None):
@@ -242,8 +251,6 @@ def main(args=None):
 
     adaptive_IPM = Adaptive_IPM()
     rclpy.spin(adaptive_IPM)
-
-    # Destroy the node explicitly
     # (optional - otherwise it will be done automatically
     # when the garbage collector destroys the node object)
     adaptive_IPM.destroy_node()
