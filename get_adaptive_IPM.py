@@ -12,8 +12,6 @@ import std_msgs.msg as std_msgs
 from sensor_msgs.msg import CompressedImage
 from sensor_msgs.msg import Imu
 from sensor_msgs.msg import PointCloud2
-from geometry_msgs.msg import Point32
-from sensor_msgs.msg import ChannelFloat32
 from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge
 
@@ -23,13 +21,13 @@ class Adaptive_IPM(Node):
     def __init__(self):
         super().__init__('adaptive_IPM')
         self.subscription = self.create_subscription(CompressedImage, '/cam_f/image/compressed', self.get_IPM, 10)
-        #self.subscription = self.create_subscription(Imu, '/imu', self.imu_quat2euler, 10)
-        self.subscription = self.create_subscription(Odometry, '/odomgyro', self.odom_quat2euler, 10)
+        self.subscription = self.create_subscription(Imu, '/imu', self.imu_quat2euler, 10)
+        #self.subscription = self.create_subscription(Odometry, '/odomgyro', self.odom_quat2euler, 10)
         self.subscription  # prevent unused variable warning
         self.IPM_publisher = self.create_publisher(PointCloud2, '/IPM_points', 10)
         
-        self.roll = 0
-        self.pitch = 0
+        self.imu_pitch = 0
+        self.odom_pitch = 0
         self.pitch_list = []
         # front camera parameters
         self.fx = 1307.928446923253
@@ -65,6 +63,7 @@ class Adaptive_IPM(Node):
         cv2.namedWindow("front_image", 0);
         cv2.resizeWindow("front_image", front_image.shape[1]//2, front_image.shape[0]//2)
         cv2.imshow("front_image", front_image)
+        
         # cv2.namedWindow("resize_front_image", 0);
         # cv2.resizeWindow("resize_front_image", resize_f_img.shape[1], resize_f_img.shape[0])
         # cv2.imshow("resize_front_image", resize_f_img)
@@ -78,10 +77,10 @@ class Adaptive_IPM(Node):
                       msg.orientation.y, 
                       msg.orientation.z)
         
-        self.roll, self.pitch, self.yaw = tf.euler.quat2euler(quaternion)
-        print(self.pitch)
-        #print(np.average(self.pitch_list))
-        self.theta_p = -self.pitch
+        self.imu_roll, self.imu_pitch, self.imu_yaw = tf.euler.quat2euler(quaternion)
+        #print(self.imu_pitch)
+
+        self.theta_p = -self.imu_pitch
         
         
     def odom_quat2euler(self, msg):
@@ -90,12 +89,22 @@ class Adaptive_IPM(Node):
                       msg.pose.pose.orientation.y,
                       msg.pose.pose.orientation.z) 
         
-        self.roll, self.pitch, self.yaw = tf.euler.quat2euler(quaternion)
-        #print(self.roll, self.pitch, self.yaw)
-        self.theta_p = -self.pitch
+        self.odom_roll, self.odom_pitch, self.odom_yaw = tf.euler.quat2euler(quaternion)
+        #print(self.pitch, self.yaw)
+        
+        self.theta_p = -self.odom_pitch
         
         
     def visualizing_image(self, points_field, intensity):
+        """_summary_
+
+        Args:
+            points_field (_type_): N*3 Points array ([X, Y, Z])
+            intensity (_type_): N*3 RGB array ([R, G ,B])
+
+        Returns:
+            _type_: RGB image
+        """
         points = points_field[:,:3]
         
         camera_XY = wtc.world_to_camera(points, self.extrinsic_param)
@@ -108,7 +117,7 @@ class Adaptive_IPM(Node):
     def point_cloud2(self, points, parent_frame):
         """ Creates a point cloud message.
         Args:
-            points: Nx4 array of xyz positions & 'g' color value
+            points: Nx6 array of xyz positions & 'bgr' color value
             parent_frame: frame in which the point cloud is defined
         Returns:
             sensor_msgs/PointCloud2 message
@@ -122,7 +131,7 @@ class Adaptive_IPM(Node):
         
         fields = [sensor_msgs.PointField(
             name=n, offset=i * itemsize, datatype=ros_dtype, count=1)
-            for i, n in enumerate('xyzbg')]
+            for i, n in enumerate('xyzbgr')]
 
         header = std_msgs.Header(frame_id=parent_frame)
 
@@ -133,8 +142,8 @@ class Adaptive_IPM(Node):
             is_dense=False,
             is_bigendian=False,
             fields=fields,
-            point_step=(itemsize * 5),  # Every point consists of three float32s.
-            row_step=(itemsize * 5 * points.shape[0]),
+            point_step=(itemsize * 6),  # Every point consists of three float32s.
+            row_step=(itemsize * 6 * points.shape[0]),
             data=data
         )        
         
@@ -153,10 +162,10 @@ class Adaptive_IPM(Node):
         # ROI
         mask = np.zeros_like(front_image)
         roi_u1, roi_v1 = 0, img_height
-        roi_u2, roi_v2 = 0, img_height*7//10
-        roi_u3, roi_v3 = img_width//4, img_height*3//5
-        roi_u4, roi_v4 = img_width*3//4, img_height*3//5
-        roi_u5, roi_v5 = img_width, img_height*7//10
+        roi_u2, roi_v2 = 0, img_height*9//10
+        roi_u3, roi_v3 = img_width//4, img_height*7//10
+        roi_u4, roi_v4 = img_width*3//4, img_height*7//10
+        roi_u5, roi_v5 = img_width, img_height*9//10
         roi_u6, roi_v6 = img_width, img_height
         vertices = np.array([[(roi_u1, roi_v1), (roi_u2, roi_v2), (roi_u3, roi_v3), 
                               (roi_u4, roi_v4), (roi_u5, roi_v5), (roi_u6, roi_v6)]], dtype=np.int32)
@@ -169,16 +178,11 @@ class Adaptive_IPM(Node):
         # ROI image -> 해당 intesity만 받아올 때 써볼 수 있지 않을까?
         roi_f_img = ROI_area[roi_v3:roi_v6, roi_u1:roi_u6]
         roi_intensity = np.reshape(roi_f_img, (roi_f_img.size//3, 3))
-    
-        
-        # print(front_image.shape)
-        # print(roi_f_img.shape)
-        # print(roi_intensity.shape)
 
         # cv2.namedWindow("front_image", 0);
         # cv2.resizeWindow("front_image", front_image.shape[1]//2, front_image.shape[0]//2)
         # cv2.imshow("front_image", front_image)
-    
+
         # cv2.namedWindow("roi_f_img", 0);
         # cv2.resizeWindow("roi_f_img", roi_f_img.shape[1]//2, roi_f_img.shape[0]//2)
         # cv2.imshow("roi_f_img", roi_f_img)
@@ -188,6 +192,7 @@ class Adaptive_IPM(Node):
         cv2.imshow("ROI_area", ROI_area)
         cv2.waitKey(1)
         
+
         
         # =================================== Adaptive IPM 적용 부분 ===================================
         # pixel idx 얻기
@@ -207,19 +212,15 @@ class Adaptive_IPM(Node):
         
         # derive X & Y
         theta_v = -np.arctan(r/self.fx)
+        print('imu pitch :', self.imu_pitch)
+        print('theta_p :', self.theta_p)
+
         X = self.h * (1 / np.tan(self.theta + self.theta_p + theta_v))
         Y = -(np.cos(theta_v) / np.cos(self.theta + self.theta_p + theta_v)) * X * c / (self.fx)
         Z = np.zeros_like(X)
-        
-        print('max', np.max(roi_intensity[:,0]))
 
-        points_field = np.column_stack((X, Y, Z, roi_intensity[:,0], roi_intensity[:,1]))
-        
-        print(points_field)
-        # print("X size :", X.size)
-        # print("Y size :", np.min(Y))
-        # print(X_Y)
-        
+        points_field = np.concatenate((X, Y, Z, roi_intensity), axis=1)
+
         
         # =================================== virtual camera로 visualizing ===================================
         # BEV_image = self.visualizing_image(points_field, roi_intensity)
@@ -229,21 +230,21 @@ class Adaptive_IPM(Node):
         # cv2.imshow("BEV_image", BEV_image)
 
 
-        # =================================== Publishing PointCloud ===================================
+        # # =================================== Publishing PointCloud ===================================
+        b = (points_field[:, 3] > 65) & (points_field[:, 3] < 80)
+        g = (points_field[:, 4] > 65) & (points_field[:, 4] < 80)
+        r = (points_field[:, 5] > 50) & (points_field[:, 5] < 68)
         
-        g_points_field = points_field[(points_field[:, 3] > 90) & (points_field[:, 4] > 90)]
-        print(g_points_field)
-        print(len(g_points_field))
+        tile_points_field = points_field[(b & g & r)]
+        print("tile_point size :", len(tile_points_field))
         
-        IPM_points = self.point_cloud2(g_points_field, 'ipm')
+        IPM_points = self.point_cloud2(tile_points_field, 'ipm')
         self.IPM_publisher.publish(IPM_points)
-
-        # plt.scatter(X, Y, s=1, c='black')
-        # plt.show()
+        
         
         end_time = time.time_ns()
-
-        print('코드 실행 시간: %20ds' % (end_time - start_time))
+        print('코드 실행 시간: %10ds' % (end_time - start_time))
+        print('---------------------------------------------')
         
         
 def main(args=None):
@@ -258,5 +259,4 @@ def main(args=None):
 
 
 if __name__ == '__main__':
-    print("do_main?")
     main()
