@@ -2,8 +2,8 @@ import rclpy
 import cv2
 import time
 import numpy as np
-import matplotlib.pyplot as plt
 import transforms3d as tf
+import message_filters
 from rclpy.node import Node
 import world_to_camera as wtc
 import sensor_msgs.msg as sensor_msgs
@@ -20,10 +20,10 @@ class Adaptive_IPM(Node):
     
     def __init__(self):
         super().__init__('adaptive_IPM')
-        self.subscription = self.create_subscription(CompressedImage, '/cam_f/image/compressed', self.get_IPM, 10)
-        self.subscription = self.create_subscription(Imu, '/imu', self.imu_quat2euler, 10)
-        #self.subscription = self.create_subscription(Odometry, '/odomgyro', self.odom_quat2euler, 10)
-        self.subscription  # prevent unused variable warning
+        self.image_sub = self.create_subscription(CompressedImage, '/cam_f/image/compressed', self.get_adaptive_IPM, 10)
+        #self.imu_sub = self.create_subscription(Imu, '/imu', self.imu_quat2euler, 10)
+        self.odom_sub = self.create_subscription(Odometry, '/odomgyro', self.odom_quat2euler, 10)
+        #self.subscription  # prevent unused variable warning
         self.IPM_publisher = self.create_publisher(PointCloud2, '/IPM_points', 10)
         
         self.imu_pitch = 0
@@ -35,8 +35,8 @@ class Adaptive_IPM(Node):
         self.cx = 1335.329531505523
         self.cy = 976.0733898764446
         
-        self.h = 0.58 # camera z position
-        self.tilt = -0.008
+        self.h = 0.561 # camera z position
+        self.tilt = -0.0126
         self.theta = -self.tilt
         self.theta_p = 0
         
@@ -58,20 +58,31 @@ class Adaptive_IPM(Node):
         # resize image
         resize_f_img = cv2.resize(front_image, (front_image.shape[1]//2, front_image.shape[0]//2), interpolation=cv2.INTER_NEAREST)
         #print(front_image)
-        print(front_image.shape)
+        #print(front_image.shape)
+        
+        hsv_front_image = cv2.cvtColor(front_image, cv2.COLOR_BGR2HSV)
+        
+        lower_range = (70, 10, 55)
+        upper_range = (90, 40, 75)
+        
+        img_mask = cv2.inRange(hsv_front_image, lower_range, upper_range)
+        img_result = cv2.bitwise_and(front_image, front_image, mask=img_mask)
 
         cv2.namedWindow("front_image", 0);
         cv2.resizeWindow("front_image", front_image.shape[1]//2, front_image.shape[0]//2)
         cv2.imshow("front_image", front_image)
         
-        # cv2.namedWindow("resize_front_image", 0);
-        # cv2.resizeWindow("resize_front_image", resize_f_img.shape[1], resize_f_img.shape[0])
-        # cv2.imshow("resize_front_image", resize_f_img)
+        # cv2.namedWindow("hsv_front_image", 0);
+        # cv2.resizeWindow("hsv_front_image", front_image.shape[1]//2, front_image.shape[0]//2)
+        # cv2.imshow("hsv_front_image", hsv_front_image)
+        
+        # cv2.namedWindow("img_result", 0);
+        # cv2.resizeWindow("img_result", img_result.shape[1]//2, img_result.shape[0]//2)
+        # cv2.imshow("img_result", img_result)
         cv2.waitKey(1)
         
         
     def imu_quat2euler(self, msg):
-        #print()
         quaternion = (msg.orientation.w,
                       msg.orientation.x, 
                       msg.orientation.y, 
@@ -96,11 +107,11 @@ class Adaptive_IPM(Node):
         
         
     def visualizing_image(self, points_field, intensity):
-        """_summary_
+        """ Create a IPM result image
 
         Args:
-            points_field (_type_): N*3 Points array ([X, Y, Z])
-            intensity (_type_): N*3 RGB array ([R, G ,B])
+            points_field (_array_): N*3 Points array ([X, Y, Z])
+            intensity (_array_): N*3 RGB array ([R, G ,B])
 
         Returns:
             _type_: RGB image
@@ -145,35 +156,70 @@ class Adaptive_IPM(Node):
             point_step=(itemsize * 6),  # Every point consists of three float32s.
             row_step=(itemsize * 6 * points.shape[0]),
             data=data
-        )        
+        ) 
+        
+
+    def threshold_pointcloud(self, points_field, type):
+        """ Do threshold using pointcloud intensity
+
+        Args:
+            points_field (_array_): N*6 Points array ([X, Y, Z, temp],  temp = N*6 bgr or hsv array)
+            type (_string_): threshold mode
+
+        Returns:
+            _type_: thresholded points_field
+        """
+        if type == 'bgr':
+            lower_ran = (65, 65, 50)
+            upper_ran = (80, 80, 68)
+            
+            b = (points_field[:, 3] > lower_ran[0]) & (points_field[:, 3] < upper_ran[0])
+            g = (points_field[:, 4] > lower_ran[1]) & (points_field[:, 4] < upper_ran[1])
+            r = (points_field[:, 5] > lower_ran[2]) & (points_field[:, 5] < upper_ran[2])
+            new_points_field = points_field[(b & g & r)]
+            
+            return new_points_field
+        
+        elif type == 'hsv':
+            lower_ran = (75, 10, 50)
+            upper_ran = (85, 40, 90)
+            
+            h = (points_field[:, 3] > lower_ran[0]) & (points_field[:, 3] < upper_ran[0])
+            s = (points_field[:, 4] > lower_ran[1]) & (points_field[:, 4] < upper_ran[1])
+            v = (points_field[:, 5] > lower_ran[2]) & (points_field[:, 5] < upper_ran[2])
+              
+            new_points_field = points_field[(h & s & v)]
+            
+            return new_points_field
         
             
-    def get_IPM(self, msg):
+    def get_adaptive_IPM(self, msg):
         start_time = time.time_ns()
         bridge = CvBridge()
         front_image = bridge.compressed_imgmsg_to_cv2(msg, 'bgr8')
+        #hsv_front_image = cv2.cvtColor(front_image, cv2.COLOR_BGR2HSV)
         #front_image = np.uint8(front_image)
-        #resize_f_img = cv2.resize(front_image, (front_image.shape[1]//2, front_image.shape[0]//2), interpolation=cv2.INTER_CUBIC)
+        resize_f_img = cv2.resize(front_image, (front_image.shape[1]//2, front_image.shape[0]//2), interpolation=cv2.INTER_CUBIC)
 
-        img_width = front_image.shape[1]
-        img_height = front_image.shape[0]
+        img_width = resize_f_img.shape[1]
+        img_height = resize_f_img.shape[0]
 
         
         # ROI
-        mask = np.zeros_like(front_image)
+        mask = np.zeros_like(resize_f_img)
         roi_u1, roi_v1 = 0, img_height
         roi_u2, roi_v2 = 0, img_height*9//10
-        roi_u3, roi_v3 = img_width//4, img_height*7//10
-        roi_u4, roi_v4 = img_width*3//4, img_height*7//10
+        roi_u3, roi_v3 = img_width//4, img_height*3//5
+        roi_u4, roi_v4 = img_width*3//4, img_height*3//5
         roi_u5, roi_v5 = img_width, img_height*9//10
         roi_u6, roi_v6 = img_width, img_height
         vertices = np.array([[(roi_u1, roi_v1), (roi_u2, roi_v2), (roi_u3, roi_v3), 
                               (roi_u4, roi_v4), (roi_u5, roi_v5), (roi_u6, roi_v6)]], dtype=np.int32)
         
         cv2.fillPoly(mask, vertices, (255, 255, 255))
-        ROI_area = cv2.bitwise_and(front_image, mask)
+        ROI_area = cv2.bitwise_and(resize_f_img, mask)
         # 파란색 직사각형 표시
-        cv2.rectangle(front_image, (roi_u1, roi_v3), (roi_u6, roi_v6), (255,0,0), 2)
+        cv2.rectangle(resize_f_img, (roi_u1, roi_v3), (roi_u6, roi_v6), (255,0,0), 2)
         
         # ROI image -> 해당 intesity만 받아올 때 써볼 수 있지 않을까?
         roi_f_img = ROI_area[roi_v3:roi_v6, roi_u1:roi_u6]
@@ -188,7 +234,7 @@ class Adaptive_IPM(Node):
         # cv2.imshow("roi_f_img", roi_f_img)
         
         cv2.namedWindow("ROI_area", 0);
-        cv2.resizeWindow("ROI_area", ROI_area.shape[1]//2, ROI_area.shape[0]//2)
+        cv2.resizeWindow("ROI_area", ROI_area.shape[1], ROI_area.shape[0])
         cv2.imshow("ROI_area", ROI_area)
         cv2.waitKey(1)
         
@@ -204,19 +250,20 @@ class Adaptive_IPM(Node):
         #pixel_arr = np.column_stack((u, v))
     
         # image coordinates translation
-        v2r = lambda v:(self.cy + 0.5 - v)
-        u2c = lambda u:(u - (self.cx + 0.5))
+        v2r = lambda v:(self.cy//2 + 0.5 - v)
+        u2c = lambda u:(u - (self.cx//2 + 0.5))
         r = v2r(v)
         c = u2c(u)      
  
         
         # derive X & Y
-        theta_v = -np.arctan(r/self.fx)
+        theta_v = -np.arctan(r/(self.fx//2))
         print('imu pitch :', self.imu_pitch)
+        print('odom pitch :', self.odom_pitch)
         print('theta_p :', self.theta_p)
 
         X = self.h * (1 / np.tan(self.theta + self.theta_p + theta_v))
-        Y = -(np.cos(theta_v) / np.cos(self.theta + self.theta_p + theta_v)) * X * c / (self.fx)
+        Y = -(np.cos(theta_v) / np.cos(self.theta + self.theta_p + theta_v)) * X * c / (self.fx//2)
         Z = np.zeros_like(X)
 
         points_field = np.concatenate((X, Y, Z, roi_intensity), axis=1)
@@ -230,22 +277,20 @@ class Adaptive_IPM(Node):
         # cv2.imshow("BEV_image", BEV_image)
 
 
-        # # =================================== Publishing PointCloud ===================================
-        b = (points_field[:, 3] > 65) & (points_field[:, 3] < 80)
-        g = (points_field[:, 4] > 65) & (points_field[:, 4] < 80)
-        r = (points_field[:, 5] > 50) & (points_field[:, 5] < 68)
+        # =================================== Publishing PointCloud ===================================
+        #tile_points_field = self.threshold_pointcloud(points_field, type='bgr')
         
-        tile_points_field = points_field[(b & g & r)]
-        print("tile_point size :", len(tile_points_field))
+        #print("tile_point size :", len(tile_points_field))
+        print("point size :", len(points_field))
         
-        IPM_points = self.point_cloud2(tile_points_field, 'ipm')
+        IPM_points = self.point_cloud2(points_field, 'ipm')
         self.IPM_publisher.publish(IPM_points)
         
         
         end_time = time.time_ns()
-        print('코드 실행 시간: %10ds' % (end_time - start_time))
+        #print('코드 실행 시간: %10ds' % (end_time - start_time))
         print('---------------------------------------------')
-        
+    
         
 def main(args=None):
     rclpy.init(args=args)

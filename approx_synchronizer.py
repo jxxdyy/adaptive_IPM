@@ -2,8 +2,8 @@ import rclpy
 import cv2
 import time
 import numpy as np
-import matplotlib.pyplot as plt
 import transforms3d as tf
+import message_filters
 from rclpy.node import Node
 import world_to_camera as wtc
 import sensor_msgs.msg as sensor_msgs
@@ -20,9 +20,14 @@ class Adaptive_IPM(Node):
     
     def __init__(self):
         super().__init__('adaptive_IPM')
-        self.subscription = self.create_subscription(CompressedImage, '/cam_f/image/compressed', self.get_IPM, 10)
-        self.subscription  # prevent unused variable warning
+        self.image_sub = message_filters.Subscriber(self, CompressedImage, '/cam_f/image/compressed')
+        #self.imu_sub = message_filters.Subscriber(self, Imu, '/imu')
+        self.odom_sub = message_filters.Subscriber(self, Odometry, '/odomgyro') 
+        #self.imu_publisher = self.create_publisher(Imu, '/syncronized_imu', 10)
         self.IPM_publisher = self.create_publisher(PointCloud2, '/IPM_points', 10)
+        
+        self.sync = message_filters.ApproximateTimeSynchronizer([self.image_sub, self.odom_sub], 10, 0.1)
+        self.sync.registerCallback(self.get_adaptive_IPM)
         
         self.imu_pitch = 0
         self.odom_pitch = 0
@@ -48,6 +53,12 @@ class Adaptive_IPM(Node):
         print("")
         self.intrinsic_param = wtc.set_intrinsic_parameter(self.fx, self.fy, self.cx, self.cy)
     
+    
+    def test_func(self, msg1, msg2):
+        print('-------------------------------------------')
+        print('msg1', msg1.header.stamp)
+        print('msg2' ,msg2.header.stamp)
+
         
     def get_image(self, msg):
         bridge = CvBridge()
@@ -78,6 +89,28 @@ class Adaptive_IPM(Node):
         # cv2.resizeWindow("img_result", img_result.shape[1]//2, img_result.shape[0]//2)
         # cv2.imshow("img_result", img_result)
         cv2.waitKey(1)
+        
+        
+    def imu_quat2euler(self, imu_msg):
+        quaternion = (imu_msg.orientation.w,
+                      imu_msg.orientation.x, 
+                      imu_msg.orientation.y, 
+                      imu_msg.orientation.z)
+        
+        self.imu_roll, self.imu_pitch, self.imu_yaw = tf.euler.quat2euler(quaternion)
+        #print(self.imu_pitch)
+        self.theta_p = -self.imu_pitch
+        
+        
+    def odom_quat2euler(self, odom_msg):
+        quaternion = (odom_msg.pose.pose.orientation.w,
+                      odom_msg.pose.pose.orientation.x, 
+                      odom_msg.pose.pose.orientation.y,
+                      odom_msg.pose.pose.orientation.z) 
+        
+        self.odom_roll, self.odom_pitch, self.odom_yaw = tf.euler.quat2euler(quaternion)
+        #print(self.pitch, self.yaw)
+        self.theta_p = -self.odom_pitch
         
         
     def visualizing_image(self, points_field, intensity):
@@ -167,10 +200,10 @@ class Adaptive_IPM(Node):
             return new_points_field
         
             
-    def get_IPM(self, msg):
+    def get_adaptive_IPM(self, image_msg, odom_msg):
         #start_time = time.time_ns()
         bridge = CvBridge()
-        front_image = bridge.compressed_imgmsg_to_cv2(msg, 'bgr8')
+        front_image = bridge.compressed_imgmsg_to_cv2(image_msg, 'bgr8')
         #hsv_front_image = cv2.cvtColor(front_image, cv2.COLOR_BGR2HSV)
         #front_image = np.uint8(front_image)
         resize_f_img = cv2.resize(front_image, (front_image.shape[1]//2, front_image.shape[0]//2), interpolation=cv2.INTER_CUBIC)
@@ -215,6 +248,9 @@ class Adaptive_IPM(Node):
 
         
         # =================================== Adaptive IPM 적용 부분 ===================================
+        #self.imu_quat2euler(imu_msg)
+        self.odom_quat2euler(odom_msg)
+        
         # pixel idx 얻기
         u_arr, v_arr = np.meshgrid(np.arange(roi_u1, roi_u6), np.arange(roi_v3, roi_v6))
 
@@ -230,14 +266,10 @@ class Adaptive_IPM(Node):
         c = u2c(u)      
  
         
-        # derive X & Y
+        # derive X & Ypoints_field
         theta_v = -np.arctan(r/(self.fx//2))
-        print('imu pitch :', self.imu_pitch)
-        print('odom pitch :', self.odom_pitch)
-        print('theta_p :', self.theta_p)
-
-        X = self.h * (1 / np.tan(self.theta + theta_v))
-        Y = -(np.cos(theta_v) / np.cos(self.theta + theta_v)) * X * c / (self.fx//2)
+        X = self.h * (1 / np.tan(self.theta + self.theta_p + theta_v))
+        Y = -(np.cos(theta_v) / np.cos(self.theta + self.theta_p + theta_v)) * X * c / (self.fx//2)
         Z = np.zeros_like(X)
 
         points_field = np.concatenate((X, Y, Z, roi_intensity), axis=1)
@@ -261,10 +293,10 @@ class Adaptive_IPM(Node):
         self.IPM_publisher.publish(IPM_points)
         
         
-        #end_time = time.time_ns()
+        end_time = time.time_ns()
         #print('코드 실행 시간: %10ds' % (end_time - start_time))
         print('---------------------------------------------')
-        
+    
         
 def main(args=None):
     rclpy.init(args=args)
