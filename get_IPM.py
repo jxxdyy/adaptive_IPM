@@ -5,10 +5,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import transforms3d as tf
 from rclpy.node import Node
-import world_to_camera as wtc
 import sensor_msgs.msg as sensor_msgs
 import std_msgs.msg as std_msgs
 #from sensor_msgs.msg import Image
+from IPM_virtual_data import world_to_camera as wtc
 from sensor_msgs.msg import CompressedImage
 from sensor_msgs.msg import Imu
 from sensor_msgs.msg import PointCloud2
@@ -183,8 +183,8 @@ class Adaptive_IPM(Node):
         mask = np.zeros_like(resize_f_img)
         roi_u1, roi_v1 = 0, img_height
         roi_u2, roi_v2 = 0, img_height*9//10
-        roi_u3, roi_v3 = img_width//4, img_height*3//5
-        roi_u4, roi_v4 = img_width*3//4, img_height*3//5
+        roi_u3, roi_v3 = img_width//4, img_height*2//3
+        roi_u4, roi_v4 = img_width*3//4, img_height*2//3
         roi_u5, roi_v5 = img_width, img_height*9//10
         roi_u6, roi_v6 = img_width, img_height
         vertices = np.array([[(roi_u1, roi_v1), (roi_u2, roi_v2), (roi_u3, roi_v3), 
@@ -208,7 +208,7 @@ class Adaptive_IPM(Node):
         # cv2.imshow("roi_f_img", roi_f_img)
         
         cv2.namedWindow("ROI_area", 0);
-        cv2.resizeWindow("ROI_area", ROI_area.shape[1], ROI_area.shape[0])
+        cv2.resizeWindow("ROI_area", ROI_area.shape[1]*4//5, ROI_area.shape[0]*4//5)
         cv2.imshow("ROI_area", ROI_area)
         cv2.waitKey(1)
         

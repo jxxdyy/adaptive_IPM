@@ -1,12 +1,15 @@
 import numpy as np
 import math as m
 import matplotlib.pyplot as plt
+from rosidl_generator_py import import_type_support
 import world_to_camera as wtc
+from scipy.spatial.transform import Rotation as R
 from mpl_toolkits.mplot3d import Axes3D
+
 
 class adaptive_IPM:
     def __init__(self):
-        self.num = 500
+        self.num = 200
         self.max_x = 20
         self.max_y = 30
         self.k = 94.34
@@ -20,15 +23,18 @@ class adaptive_IPM:
         self.cam_y = -5.0
         self.cam_z = 5.0  # cam_z > 0
         self.pan = 0.0
-        self.tilt = -15.0
+        self.tilt = 0.0
+        self.roll = 5.0
+        self.h = self.cam_z
 
         self.pitch = 0.0  # pitch motion change
 
         self.new_tilt = self.tilt + self.pitch
         #self.fr = self.fx*(self.w_ccd / 2*self.cx)
         self.fr = self.fx*(1/self.k)
-        self.theta = -self.tilt * m.pi / 180
-        self.theta_p = -self.pitch * m.pi / 180
+        self.theta = np.deg2rad(-self.tilt)
+        self.theta_p = np.deg2rad(-self.pitch)
+        self.theta_r = np.deg2rad(self.roll)
 
         # ================= Set ground data  =================
         self.x_value = np.linspace(1, self.max_x, self.num)  # linspace(a, b, c) : a ~ b 까지 c등분 한 좌표들
@@ -40,7 +46,7 @@ class adaptive_IPM:
         # Intensidy
         self.intensity_arr = wtc.point_wise_intensity(self.point_arr, self.max_x)
         # Extrinsic & Intrinsic parameter set
-        self.extrinsic_param = wtc.set_extrinsic_parameter(self.cam_x, self.cam_y, self.cam_z, self.pan, self.new_tilt)
+        self.extrinsic_param = wtc.set_extrinsic_parameter(self.cam_x, self.cam_y, self.cam_z, self.pan, self.new_tilt, self.roll)
         print("")
         self.intrinsic_param = wtc.set_intrinsic_parameter(self.fx, self.fy, self.cx, self.cy)
         # Camera
@@ -173,100 +179,144 @@ class adaptive_IPM:
         return line_u, line_v
 
 
-    def IPM_X(self, y_pixels):
-        X_list = []
-        h = self.cam_z
-        for i in range(len(y_pixels)):
-            v = y_pixels[i]
-            theta_v = -m.atan2(self.v2r(v), self.fr)
+    def rotation_cal(self, m_pixels):
+        r_pitch = R.from_rotvec([0, -self.theta_p, 0])
+        pitch_rot = r_pitch.as_matrix() # pitch rotation matrix
+        print(pitch_rot)
+        
+        rot_m_pixels = np.matmul(m_pixels, pitch_rot)
+        
+        return rot_m_pixels
+    
+    
+    def IPM(self, u_arr, v_arr):
+        u = np.reshape(u_arr, (len(u_arr), 1))
+        v = np.reshape(v_arr, (len(v_arr), 1))
 
-            X = h * (1 / m.tan(self.theta + theta_v))
-            X_list.append(X)
+        v2r = lambda v:(self.cy + 0.5 - v)
+        u2c = lambda u:(u - (self.cx + 0.5))
+        r = v2r(v)
+        c = u2c(u)
+        
+        print(r)
+        
+        # derive X & Y
+        theta_v = -np.arctan(r/self.fx)
+    
+        X = self.h * (1 / np.tan(self.theta + theta_v))
+        Y = -(np.cos(theta_v) / np.cos(self.theta + theta_v)) * X * c / self.fx
+        Z = np.zeros_like(X)
 
-        return X_list
+        IPM_points = np.concatenate((X, Y, Z), axis=1)
+        
+        return IPM_points
+    
+    
+    def rot_IPM(self, u_arr, v_arr):
+        rotation_2d = np.array([[np.cos(self.theta_r), -np.sin(self.theta_r)],
+                                [np.sin(self.theta_r), np.cos(self.theta_r)]])
+        
+        u = np.reshape(u_arr, (len(u_arr), 1))
+        v = np.reshape(v_arr, (len(v_arr), 1))
+
+        v2r = lambda v:(self.cy + 0.5 - v)
+        u2c = lambda u:(u - (self.cx + 0.5))
+        r_1 = v2r(v)
+        c_1 = u2c(u)
+        temp = np.zeros_like(r_1)  
+        
+        rc = np.concatenate((r_1, c_1), axis=1)
+        print('rc', rc)
+        comp_rc = np.matmul(rc, rotation_2d)
+        print('comp_rc', comp_rc)
+        
+        # rot_m_pixels = self.rotation_cal(rc)
+        # r = np.reshape(rot_m_pixels[:, 0], (rot_m_pixels[:, 0].size, 1))
+        # c = np.reshape(rot_m_pixels[:, 1], (rot_m_pixels[:, 1].size, 1))
+        
+        r = np.reshape(comp_rc[:, 0], (comp_rc[:, 0].size, 1))
+        c = np.reshape(comp_rc[:, 1], (comp_rc[:, 1].size, 1))
+        
+        print('--------------')
+        print(r)
+
+        # derive X & Y
+        theta_v = -np.arctan(r/self.fx)
+    
+        X = self.h * (1 / np.tan(self.theta + theta_v))
+        Y = -(np.cos(theta_v) / np.cos(self.theta + theta_v)) * X * c / self.fx
+        Z = np.zeros_like(X)
+
+        IPM_points = np.concatenate((X, Y, Z), axis=1)
+
+        return IPM_points
 
 
-    def IPM_Y(self, x_pixels, y_pixels, X):
-        Y_list = []
-        for i in range(len(y_pixels)):
-            u = x_pixels[i]
+    def adaptive_IPM(self, u_arr, v_arr):
+        u = np.reshape(u_arr, (len(u_arr), 1))
+        v = np.reshape(v_arr, (len(v_arr), 1))
+        
+        v2r = lambda v:(self.cy + 0.5 - v)
+        u2c = lambda u:(u - (self.cx + 0.5))
+        r = v2r(v)
+        c = u2c(u)      
+ 
+        # derive X & Y
+        theta_v = -np.arctan(r/self.fx)
+    
+        X = self.h * (1 / np.tan(self.theta + self.theta_p + theta_v))
+        Y = -(np.cos(theta_v) / np.cos(self.theta + self.theta_p + theta_v)) * X * c / self.fx
+        Z = np.zeros_like(X)
 
-            Y = -X[i] * self.u2c(u) / self.fr
-            Y_list.append(Y)
-
-        return Y_list
-
-
-    def adaptive_IPM_X(self, y_pixels):
-        X_list = []
-        h = self.cam_z
-        for i in range(len(y_pixels)):
-            v = y_pixels[i]
-            theta_v = -m.atan2(self.v2r(v), self.fr)
-
-            X = h * (1 / m.tan(self.theta + self.theta_p + theta_v))
-            X_list.append(X)
-
-        return X_list
-
-
-    def adaptive_IPM_Y(self, x_pixels, y_pixels, X):
-        Y_list = []
-        for i in range(len(y_pixels)):
-            u = x_pixels[i]
-            v = y_pixels[i]
-            theta_v = -m.atan2(self.v2r(v), self.fr)
-
-            Y = -(m.cos(theta_v) / m.cos(self.theta + self.theta_p + theta_v)) * X[i] * self.u2c(u) / self.fr
-            #Y = -X[i] * self.u2c(u) / self.fr
-            Y_list.append(Y)
-
-        return Y_list
-
-
+        ad_IPM_points = np.concatenate((X, Y, Z), axis=1)
+        
+        return ad_IPM_points
+        
+        
     def IPM_visualizing(self):
         u, v = self.image_pixel()
         line_u, line_v = self.line_pixel()
-
-        X = self.IPM_X(v)
-        Y = self.IPM_Y(u, v, X)
-
-        line_X = self.IPM_X(line_v)
-        line_Y = self.IPM_Y(line_u, line_v, line_X)
+        ipm_points = self.IPM(u, v)
+        l_ipm_points = self.IPM(line_u, line_v)
+        
+        rot_ipm_points = self.rot_IPM(u, v)
+        l_rot_ipm_points = self.rot_IPM(line_u, line_v)
 
         plt.figure()
-        plt.scatter(X, Y, s=1, c='black')
-        plt.scatter(line_X, line_Y, s=1, c='yellow')
+        plt.scatter(ipm_points[:, 0], ipm_points[:, 1], s=1, c='black')
+        plt.scatter(l_ipm_points[:, 0], l_ipm_points[:, 1], s=1, c='yellow')
 
         plt.title("IPM Plane / Pitch motion : {}".format(self.pitch))
+        
+        plt.figure()
+        plt.scatter(rot_ipm_points[:, 0], rot_ipm_points[:, 1], s=1, c='black')
+        plt.scatter(l_rot_ipm_points[:, 0], l_rot_ipm_points[:, 1], s=1, c='yellow')
 
-
-    def Adaptive_IPM_visualizing(self):
+        plt.title("rot_IPM Plane / Pitch motion : {}".format(self.pitch))
+        
+        
+    def adaptive_IPM_visualizing(self):
         u, v = self.image_pixel()
         line_u, line_v = self.line_pixel()
-
-        X = self.adaptive_IPM_X(v)
-        Y = self.adaptive_IPM_Y(u, v, X)
-
-        line_X = self.adaptive_IPM_X(line_v)
-        line_Y = self.adaptive_IPM_Y(line_u, line_v, line_X)
-
+        ad_ipm_points = self.adaptive_IPM(u, v)
+        l_ad_ipm_points = self.adaptive_IPM(line_u, line_v)
+ 
         plt.figure()
-        plt.scatter(X, Y, s=1, c='black')
-        plt.scatter(line_X, line_Y, s=1, c='yellow')
-
+        plt.scatter(ad_ipm_points[:, 0], ad_ipm_points[:, 1], s=1, c='black')
+        plt.scatter(l_ad_ipm_points[:, 0], l_ad_ipm_points[:, 1], s=1, c='yellow')
+        
         plt.title("Adaptive IPM Plane / Pitch motion : {}".format(self.pitch))
-
-
+    
+    
 if __name__ == "__main__":
     print("=================== Do Adaptive IPM ===================")
     IPM1 = adaptive_IPM()
 
-    IPM1.Ground_visualing()
+    # IPM1.Ground_visualing()
     IPM1.ThreeD_graph_visualing()
     IPM1.Image_visulizing()
 
     IPM1.IPM_visualizing()
-    IPM1.Adaptive_IPM_visualizing()
+    IPM1.adaptive_IPM_visualizing()
 
     plt.show()

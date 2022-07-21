@@ -5,10 +5,10 @@ import numpy as np
 import transforms3d as tf
 import message_filters
 from rclpy.node import Node
-import world_to_camera as wtc
 import sensor_msgs.msg as sensor_msgs
 import std_msgs.msg as std_msgs
 #from sensor_msgs.msg import Image
+from IPM_virtual_data import world_to_camera as wtc
 from sensor_msgs.msg import CompressedImage
 from sensor_msgs.msg import Imu
 from sensor_msgs.msg import PointCloud2
@@ -36,7 +36,7 @@ class Adaptive_IPM(Node):
         self.cy = 976.0733898764446
         
         self.h = 0.561 # camera z position
-        self.tilt = -0.0126
+        self.tilt = 0.0
         self.theta = -self.tilt
         self.theta_p = 0
         
@@ -91,7 +91,7 @@ class Adaptive_IPM(Node):
         self.imu_roll, self.imu_pitch, self.imu_yaw = tf.euler.quat2euler(quaternion)
         #print(self.imu_pitch)
 
-        self.theta_p = -self.imu_pitch
+        self.theta_p = -self.imu_pitch - 0.008
         
         
     def odom_quat2euler(self, msg):
@@ -181,7 +181,7 @@ class Adaptive_IPM(Node):
             return new_points_field
         
         elif type == 'hsv':
-            lower_ran = (75, 10, 50)
+            lower_ran = (75, 10, 55)
             upper_ran = (85, 40, 90)
             
             h = (points_field[:, 3] > lower_ran[0]) & (points_field[:, 3] < upper_ran[0])
@@ -197,7 +197,7 @@ class Adaptive_IPM(Node):
         start_time = time.time_ns()
         bridge = CvBridge()
         front_image = bridge.compressed_imgmsg_to_cv2(msg, 'bgr8')
-        #hsv_front_image = cv2.cvtColor(front_image, cv2.COLOR_BGR2HSV)
+        hsv_front_image = cv2.cvtColor(front_image, cv2.COLOR_BGR2HSV)
         #front_image = np.uint8(front_image)
         resize_f_img = cv2.resize(front_image, (front_image.shape[1]//2, front_image.shape[0]//2), interpolation=cv2.INTER_CUBIC)
 
@@ -209,8 +209,8 @@ class Adaptive_IPM(Node):
         mask = np.zeros_like(resize_f_img)
         roi_u1, roi_v1 = 0, img_height
         roi_u2, roi_v2 = 0, img_height*9//10
-        roi_u3, roi_v3 = img_width//4, img_height*3//5
-        roi_u4, roi_v4 = img_width*3//4, img_height*3//5
+        roi_u3, roi_v3 = img_width//4, img_height*7//10
+        roi_u4, roi_v4 = img_width*3//4, img_height*7//10
         roi_u5, roi_v5 = img_width, img_height*9//10
         roi_u6, roi_v6 = img_width, img_height
         vertices = np.array([[(roi_u1, roi_v1), (roi_u2, roi_v2), (roi_u3, roi_v3), 
@@ -234,7 +234,7 @@ class Adaptive_IPM(Node):
         # cv2.imshow("roi_f_img", roi_f_img)
         
         cv2.namedWindow("ROI_area", 0);
-        cv2.resizeWindow("ROI_area", ROI_area.shape[1], ROI_area.shape[0])
+        cv2.resizeWindow("ROI_area", ROI_area.shape[1]*4//5, ROI_area.shape[0]*4//5)
         cv2.imshow("ROI_area", ROI_area)
         cv2.waitKey(1)
         
@@ -258,10 +258,6 @@ class Adaptive_IPM(Node):
         
         # derive X & Y
         theta_v = -np.arctan(r/(self.fx//2))
-        print('imu pitch :', self.imu_pitch)
-        print('odom pitch :', self.odom_pitch)
-        print('theta_p :', self.theta_p)
-
         X = self.h * (1 / np.tan(self.theta + self.theta_p + theta_v))
         Y = -(np.cos(theta_v) / np.cos(self.theta + self.theta_p + theta_v)) * X * c / (self.fx//2)
         Z = np.zeros_like(X)
@@ -279,11 +275,12 @@ class Adaptive_IPM(Node):
 
         # =================================== Publishing PointCloud ===================================
         #tile_points_field = self.threshold_pointcloud(points_field, type='bgr')
-        
         #print("tile_point size :", len(tile_points_field))
-        print("point size :", len(points_field))
-        
-        IPM_points = self.point_cloud2(points_field, 'ipm')
+        #print("point size :", len(points_field))
+        print('imu pitch :', self.imu_pitch)
+        print('odom pitch :', self.odom_pitch)
+        print('theta_p :', self.theta_p)
+        IPM_points = self.point_cloud2(points_field, 'adipm')
         self.IPM_publisher.publish(IPM_points)
         
         

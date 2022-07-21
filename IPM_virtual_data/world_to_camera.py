@@ -27,7 +27,8 @@ def set_extrinsic_parameter(x: float = 0.0,
                             y: float = 0.0,
                             z: float = 0.0,
                             pan: float = 0.0,
-                            tilt: float = 0.0):
+                            tilt: float = 0.0,
+                            roll: float = 0.0):
     '''
     :param x: camera position x
     :param y: camera position y
@@ -36,11 +37,12 @@ def set_extrinsic_parameter(x: float = 0.0,
     :param tilt: tilt angle
     :return: extrincsic parameter list
     '''
-    ex_param = [x, y, z, pan, tilt]
+    ex_param = [x, y, z, pan, tilt, roll]
     print("-----Extrinsic Parmeter-----")
     print("camera position: ({}, {}, {})".format(x, y, z))
     print("pan : {}".format(pan))
     print("tilt : {}".format(tilt))
+    print("roll : {}".format(roll))
 
     return ex_param
 
@@ -69,19 +71,20 @@ def set_intrinsic_parameter(fx: float = 0.0,
 def extrinsic_matrix(e):
     R = np.zeros((3, 3))  # Extrinsic matrix
 
-    pan = e[3] * m.pi / 180
-    tilt = e[4] * m.pi / 180
+    p = np.deg2rad(e[3])
+    t = np.deg2rad(e[4])
+    r = np.deg2rad(e[5])
 
     # Extrinsic matrix R
-    R[0][0] = m.cos(pan)
-    R[0][1] = m.sin(pan)
-    R[0][2] = 0
-    R[1][0] = -m.sin(tilt) * m.sin(pan)
-    R[1][1] = m.sin(tilt) * m.cos(pan)
-    R[1][2] = -m.cos(tilt)
-    R[2][0] = -m.cos(tilt) * m.sin(pan)
-    R[2][1] = m.cos(tilt) * m.cos(pan)
-    R[2][2] = m.sin(tilt)
+    R[0][0] = np.cos(p)*np.cos(-r)-(np.sin(p)*np.sin(t)*np.sin(-r))
+    R[0][1] = np.sin(p)*np.cos(-r)+(np.cos(p)*np.sin(t)*np.sin(-r)) 
+    R[0][2] = -np.cos(t)*np.sin(-r)
+    R[1][0] = -np.cos(p)*np.sin(-r)-(np.sin(p)*np.sin(t)*np.cos(-r))
+    R[1][1] = -np.sin(p)*np.sin(-r)+(np.cos(p)*np.sin(t)*np.cos(-r))
+    R[1][2] = -np.cos(t)*np.cos(-r)
+    R[2][0] = -np.sin(p)*np.cos(t)
+    R[2][1] = np.cos(p)*np.cos(t)
+    R[2][2] = np.sin(t)
 
     return R
 
@@ -191,12 +194,10 @@ def visualizing_image(pixel, rgb_arr):
     :param rgb_arr: point-wise array
     :return: final_image
     '''
-    # img_w = 640
-    # img_h = 480
-    img_w = 2592
-    img_h = 1944
+    img_w = 640
+    img_h = 480
     # plt.imshow()는 정수형만 표현하므로 dtype = uin8
-    result_img = np.full((img_h, img_w, 3), 0, dtype=np.uint8)
+    result_img = np.full((img_h, img_w, 3), 255, dtype=np.uint8)
     # result_img.fill()
 
     for i in range(len(pixel)):
